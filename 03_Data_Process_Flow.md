@@ -1,51 +1,58 @@
-# 🔄 3. 詳細処理フロー図
+# 🔄 3. 詳細処理フロー図 (Flowchart)
 
 ## 3.1 ゲームループ処理 (Main Loop)
-`requestAnimationFrame` によって毎フレーム実行される処理の流れです。
+`requestAnimationFrame` によって毎フレーム（約1/60秒ごと）実行されるメインループのフローチャートです。
 
 ```mermaid
-sequenceDiagram
-    participant Loop as GameLoop
-    participant GM as GameManager
-    participant Player as TextAlivePlayer
-    participant Lyrics as LyricsRenderer
-    participant Pose as MediaPipe
+flowchart TD
+    Start([開始: 1フレーム処理]) --> Input[1. 入力・時間取得<br/>(DeltaTime, マウス/骨格座標)]
+    Input --> Sync[2. 楽曲同期 TextAlive<br/>現在の再生位置を取得]
 
-    Loop->>GM: onUpdate(delta, elapsed)
-    
-    rect rgb(30, 30, 30)
-    Note over GM: 🎵 1. 再生位置同期
-    GM->>Player: getTimer().position
-    Player-->>GM: currentTime (ms)
-    
-    Note over GM: 📝 2. 歌詞更新
-    GM->>GM: updateLyrics(currentTime)
-    alt 歌詞タイミング到来
-        GM->>Lyrics: displayLyric(lyricData)
-    end
-    
-    Note over GM: 👆 3. ホールド・入力判定
-    GM->>GM: updateHoldStates(delta)
-    
-    Note over GM: 📷 4. ボディ検知 (Body Mode)
-    opt Body Mode
-        Pose-->>GM: onResults(landmarks)
-        GM->>GM: handlePoseResults(landmarks)
-        Note right of GM: 手首座標とバブルの<br>衝突判定を実行
-    end
-    end
+    Sync --> LyricCheck{歌詞データはある？}
+    LyricCheck -- No --> MoveBubbles
+    LyricCheck -- Yes --> Spawn[歌詞バブル生成<br/>(BubblePoolから取得)]
+    Spawn --> MoveBubbles[バブル位置更新]
+
+    MoveBubbles --> HitCheck{当たり判定}
+    HitCheck -- "接触なし" --> Render
+    HitCheck -- "接触あり" --> CalcScore[3. スコア計算<br/>ホールド進行度加算/コンボ更新]
+
+    CalcScore --> Render[4. 描画レンダリング<br/>DOM / Three.js / Canvas]
+    Render --> End([終了: 次のフレームへ])
+
+    End -.-> Start
 ```
 ---
 
 ## 3.2 スコア送信フロー (Score Submission)
-クライアントからサーバーへの安全なスコア送信プロセスです。
+ゲーム終了後、スコアがデータベースに保存されるまでの判定フローチャートです。
 
-- **トークン取得**: クライアントは `GET /api/token` でHMAC署名付きトークンを取得。
-- **CAPTCHA認証**: Turnstileウィジェットを実行し、認証トークンを取得。
-- **データ送信**: スコア、コンボ、ランク等のデータを `POST /api/score` へ送信。
-- **サーバー検証**:
-    - **Rate Limit**: IPごとの頻度制限チェック。
-    - **Signature**: トークンの改ざん検証。
-    - **Turnstile**: Cloudflare APIで人間であることを確認。
-    - **Cheat Check**: 異常なハイスコア（>1,000,000）を検知。
-- **DB保存**: 全ての検証を通過した場合のみ、Supabaseへ保存。
+```mermaid
+flowchart TD
+    GameEnd([ゲーム終了]) --> Token[1. 認証トークン取得<br/>GET /api/token]
+    Token --> Captcha[2. Turnstile認証<br/>(Bot対策)]
+    Captcha --> Post[3. データ送信<br/>POST /api/score]
+
+    Post --> ServerVal{4. サーバー検証}
+    
+    subgraph ServerSide [Cloudflare Workers]
+        ServerVal -- "頻度過多" --> Error429[エラー 429<br/>Too Many Requests]
+        ServerVal -- "署名不正" --> Error403[エラー 403<br/>Forbidden]
+        ServerVal -- "Bot判定" --> ErrorBot[エラー 403<br/>Bot Detected]
+        
+        ServerVal -- "検証OK" --> LogicCheck{スコア妥当性チェック}
+        
+        LogicCheck -- "異常値 (100万超)" --> Flag[不正フラグ付与<br/>is_suspicious=true]
+        LogicCheck -- "正常値" --> Safe[正常ステータス]
+    end
+
+    Flag --> Save
+    Safe --> Save
+    
+    Save[(5. DB保存<br/>Supabase)] --> Response[レスポンス返却]
+    Response --> RankRef[ランキング更新]
+    RankRef --> Finish([完了])
+```
+### 処理のポイント
+1.  **ゲームループ**: 「入力→同期→生成→判定→描画」の順で処理が進みます。ループの最後で次のフレームを予約します。
+2.  **スコア送信**: クライアントから送信されたデータは、サーバー側で**4段階のチェック**（レート制限、署名、Bot、異常値）を通過したものだけが正規の記録として扱われます。
