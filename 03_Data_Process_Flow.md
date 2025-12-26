@@ -1,58 +1,57 @@
-# 🔄 3. 詳細処理フロー図 (Flowchart)
+# 🔄 3. 詳細処理フロー図
 
 ## 3.1 ゲームループ処理 (Main Loop)
-`requestAnimationFrame` によって毎フレーム（約1/60秒ごと）実行されるメインループのフローチャートです。
+`requestAnimationFrame` によって毎フレーム（約1/60秒ごと）実行される処理の流れです。
 
 ```mermaid
 flowchart TD
-    Start([開始: 1フレーム処理]) --> Input[1. 入力・時間取得<br/>(DeltaTime, マウス/骨格座標)]
-    Input --> Sync[2. 楽曲同期 TextAlive<br/>現在の再生位置を取得]
-
-    Sync --> LyricCheck{歌詞データはある？}
-    LyricCheck -- No --> MoveBubbles
-    LyricCheck -- Yes --> Spawn[歌詞バブル生成<br/>(BubblePoolから取得)]
-    Spawn --> MoveBubbles[バブル位置更新]
-
-    MoveBubbles --> HitCheck{当たり判定}
-    HitCheck -- "接触なし" --> Render
-    HitCheck -- "接触あり" --> CalcScore[3. スコア計算<br/>ホールド進行度加算/コンボ更新]
-
-    CalcScore --> Render[4. 描画レンダリング<br/>DOM / Three.js / Canvas]
-    Render --> End([終了: 次のフレームへ])
-
-    End -.-> Start
+    Start([START FRAME]) --> Input[1. センシング・入力取得<br/>経過時間/マウス/骨格座標]
+    Input --> Sync[2. 楽曲同期 TextAlive<br/>再生位置取得]
+    
+    Sync --> CheckLyrics{歌詞データはある？}
+    CheckLyrics -- No --> HitCheck
+    CheckLyrics -- Yes --> Spawn[歌詞バブル生成 Spawn]
+    Spawn --> HitCheck
+    
+    HitCheck{当たり判定 Hit Check} -->|手首・カーソルとの距離| ScoreCalc[3. スコア・コンボ計算<br/>ホールド進行度更新]
+    
+    ScoreCalc --> Render[4. 描画 Render<br/>DOM / Three.js]
+    Render --> End([END FRAME])
+    
+    End -.->|Next Frame| Start
 ```
 ---
 
 ## 3.2 スコア送信フロー (Score Submission)
-ゲーム終了後、スコアがデータベースに保存されるまでの判定フローチャートです。
+ゲーム終了後、クライアントからサーバーへスコアを送信し、検証を経て保存するまでのプロセスです。
 
 ```mermaid
 flowchart TD
-    GameEnd([ゲーム終了]) --> Token[1. 認証トークン取得<br/>GET /api/token]
-    Token --> Captcha[2. Turnstile認証<br/>(Bot対策)]
-    Captcha --> Post[3. データ送信<br/>POST /api/score]
-
-    Post --> ServerVal{4. サーバー検証}
+    Finish([GAME FINISHED]) --> Token[1. トークン取得<br/>GET /api/token]
+    Token --> Captcha[2. CAPTCHA認証<br/>Turnstile]
+    Captcha --> Submit[3. スコア送信<br/>POST /api/score]
     
-    subgraph ServerSide [Cloudflare Workers]
-        ServerVal -- "頻度過多" --> Error429[エラー 429<br/>Too Many Requests]
-        ServerVal -- "署名不正" --> Error403[エラー 403<br/>Forbidden]
-        ServerVal -- "Bot判定" --> ErrorBot[エラー 403<br/>Bot Detected]
+    Submit --> Verify[4. サーバー側検証]
+    
+    subgraph ServerSide [Server Verification]
+        Verify --> RateLimit{レート制限}
+        RateLimit -- NG --> Err429[Error 429]
+        RateLimit -- OK --> SignCheck{署名 HMAC 検証}
         
-        ServerVal -- "検証OK" --> LogicCheck{スコア妥当性チェック}
+        SignCheck -- NG --> Err403[Error 403]
+        SignCheck -- OK --> BotCheck{Turnstile検証}
         
-        LogicCheck -- "異常値 (100万超)" --> Flag[不正フラグ付与<br/>is_suspicious=true]
-        LogicCheck -- "正常値" --> Safe[正常ステータス]
+        BotCheck -- NG --> Err403Bot[Error 403]
+        BotCheck -- OK --> ScoreCheck{スコアは正常値？}
     end
-
-    Flag --> Save
-    Safe --> Save
     
-    Save[(5. DB保存<br/>Supabase)] --> Response[レスポンス返却]
-    Response --> RankRef[ランキング更新]
-    RankRef --> Finish([完了])
+    ScoreCheck -- Yes --> Save
+    ScoreCheck -- "No (不正疑い)" --> Flag[不正フラグ付与<br/>is_suspicious=true]
+    Flag --> Save
+    
+    Save[(5. DB保存<br/>Supabase)] --> RankUpdate[ランキング更新]
+    RankUpdate --> End([END])
 ```
-### 処理のポイント
-1.  **ゲームループ**: 「入力→同期→生成→判定→描画」の順で処理が進みます。ループの最後で次のフレームを予約します。
-2.  **スコア送信**: クライアントから送信されたデータは、サーバー側で**4段階のチェック**（レート制限、署名、Bot、異常値）を通過したものだけが正規の記録として扱われます。
+### 処理詳細補足
+* **ゲームループ**: ユーザー入力（マウス、タッチ、骨格）と楽曲再生位置を毎フレーム同期させ、判定と描画を行います。
+* **スコア送信**: 不正なスコア送信を防ぐため、サーバー側で「レート制限」「署名検証」「Bot認証」「スコア妥当性チェック」の4重の検証を行います。
