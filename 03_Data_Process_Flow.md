@@ -37,7 +37,11 @@ sequenceDiagram
     end
 ```
 
-### 処理詳細解説
+---
+
+## 3.2 スコア送信フロー (Score Submission)
+
+クライアントからサーバーへの安全なスコア送信プロセスです。
 
 - **トークン取得**: クライアントは `GET /api/token` でHMAC署名付きトークンを取得。
 - **CAPTCHA認証**: Turnstileウィジェットを実行し、認証トークンを取得。
