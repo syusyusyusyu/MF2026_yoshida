@@ -1,57 +1,51 @@
 # 🔄 3. 詳細処理フロー図
 
 ## 3.1 ゲームループ処理 (Main Loop)
-`requestAnimationFrame` によって毎フレーム（約1/60秒ごと）実行される処理の流れです。
+`requestAnimationFrame` によって毎フレーム実行される処理の流れです。
 
 ```mermaid
-flowchart TD
-    Start([START FRAME]) --> Input[1. センシング・入力取得<br/>経過時間/マウス/骨格座標]
-    Input --> Sync[2. 楽曲同期 TextAlive<br/>再生位置取得]
+sequenceDiagram
+    participant Loop as GameLoop
+    participant GM as GameManager
+    participant Player as TextAlivePlayer
+    participant Lyrics as LyricsRenderer
+    participant Pose as MediaPipe
+
+    Loop->>GM: onUpdate(delta, elapsed)
     
-    Sync --> CheckLyrics{歌詞データはある？}
-    CheckLyrics -- No --> HitCheck
-    CheckLyrics -- Yes --> Spawn[歌詞バブル生成 Spawn]
-    Spawn --> HitCheck
+    rect rgb(30, 30, 30)
+    Note over GM: 🎵 1. 再生位置同期
+    GM->>Player: getTimer().position
+    Player-->>GM: currentTime (ms)
     
-    HitCheck{当たり判定 Hit Check} -->|手首・カーソルとの距離| ScoreCalc[3. スコア・コンボ計算<br/>ホールド進行度更新]
+    Note over GM: 📝 2. 歌詞更新
+    GM->>GM: updateLyrics(currentTime)
+    alt 歌詞タイミング到来
+        GM->>Lyrics: displayLyric(lyricData)
+    end
     
-    ScoreCalc --> Render[4. 描画 Render<br/>DOM / Three.js]
-    Render --> End([END FRAME])
+    Note over GM: 👆 3. ホールド・入力判定
+    GM->>GM: updateHoldStates(delta)
     
-    End -.->|Next Frame| Start
+    Note over GM: 📷 4. ボディ検知 (Body Mode)
+    opt Body Mode
+        Pose-->>GM: onResults(landmarks)
+        GM->>GM: handlePoseResults(landmarks)
+        Note right of GM: 手首座標とバブルの<br>衝突判定を実行
+    end
+    end
 ```
 ---
 
 ## 3.2 スコア送信フロー (Score Submission)
-ゲーム終了後、クライアントからサーバーへスコアを送信し、検証を経て保存するまでのプロセスです。
+クライアントからサーバーへの安全なスコア送信プロセスです。
 
-```mermaid
-flowchart TD
-    Finish([GAME FINISHED]) --> Token[1. トークン取得<br/>GET /api/token]
-    Token --> Captcha[2. CAPTCHA認証<br/>Turnstile]
-    Captcha --> Submit[3. スコア送信<br/>POST /api/score]
-    
-    Submit --> Verify[4. サーバー側検証]
-    
-    subgraph ServerSide [Server Verification]
-        Verify --> RateLimit{レート制限}
-        RateLimit -- NG --> Err429[Error 429]
-        RateLimit -- OK --> SignCheck{署名 HMAC 検証}
-        
-        SignCheck -- NG --> Err403[Error 403]
-        SignCheck -- OK --> BotCheck{Turnstile検証}
-        
-        BotCheck -- NG --> Err403Bot[Error 403]
-        BotCheck -- OK --> ScoreCheck{スコアは正常値？}
-    end
-    
-    ScoreCheck -- Yes --> Save
-    ScoreCheck -- "No (不正疑い)" --> Flag[不正フラグ付与<br/>is_suspicious=true]
-    Flag --> Save
-    
-    Save[(5. DB保存<br/>Supabase)] --> RankUpdate[ランキング更新]
-    RankUpdate --> End([END])
-```
-### 処理詳細補足
-* **ゲームループ**: ユーザー入力（マウス、タッチ、骨格）と楽曲再生位置を毎フレーム同期させ、判定と描画を行います。
-* **スコア送信**: 不正なスコア送信を防ぐため、サーバー側で「レート制限」「署名検証」「Bot認証」「スコア妥当性チェック」の4重の検証を行います。
+- **トークン取得**: クライアントは `GET /api/token` でHMAC署名付きトークンを取得。
+- **CAPTCHA認証**: Turnstileウィジェットを実行し、認証トークンを取得。
+- **データ送信**: スコア、コンボ、ランク等のデータを `POST /api/score` へ送信。
+- **サーバー検証**:
+    - **Rate Limit**: IPごとの頻度制限チェック。
+    - **Signature**: トークンの改ざん検証。
+    - **Turnstile**: Cloudflare APIで人間であることを確認。
+    - **Cheat Check**: 異常なハイスコア（>1,000,000）を検知。
+- **DB保存**: 全ての検証を通過した場合のみ、Supabaseへ保存。
