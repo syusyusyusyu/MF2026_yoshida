@@ -14,26 +14,26 @@ sequenceDiagram
 
     Loop->>GM: onUpdate(delta, elapsed)
 
-    rect rgb(30,30,30)
-    note over GM: 🎵 ① 再生位置同期
-    GM->>Player: getTimer().position
-    Player-->>GM: currentTime (ms)
+    rect rgb(30, 30, 30)
+        note over GM: 🎵 ① 再生位置同期
+        GM->>Player: getTimer().position
+        Player-->>GM: currentTime (ms)
 
-    note over GM: 📝 ② 歌詞更新
-    GM->>GM: updateLyrics(currentTime)
-    alt 歌詞タイミング到来
-        GM->>Lyrics: displayLyric(lyricData)
-    end
+        note over GM: 📝 ② 歌詞更新
+        GM->>GM: updateLyrics(currentTime)
+        alt 歌詞タイミング到来
+            GM->>Lyrics: displayLyric(lyricData)
+        end
 
-    note over GM: 👆 ③ ホールド・入力判定
-    GM->>GM: updateHoldStates(delta)
+        note over GM: 👆 ③ ホールド・入力判定
+        GM->>GM: updateHoldStates(delta)
 
-    note over GM: 📷 ④ ボディ検知 (Body Mode)
-    opt Body Mode
-        Pose-->>GM: onResults(landmarks)
-        GM->>GM: handlePoseResults(landmarks)
-        note right of GM: 手首座標とバブルの衝突判定を実行
-    end
+        note over GM: 📷 ④ ボディ検知 (Body Mode)
+        opt Body Mode
+            Pose-->>GM: onResults(landmarks)
+            GM->>GM: handlePoseResults(landmarks)
+            note right of GM: 手首座標とバブルの衝突判定を実行
+        end
     end
 ```
 
