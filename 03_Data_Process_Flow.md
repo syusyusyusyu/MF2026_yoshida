@@ -1,65 +1,57 @@
-# 3. 詳細処理フロー図
+# 🔄 3. 詳細処理フロー図
 
 ## 3.1 ゲームループ処理 (Main Loop)
-`requestAnimationFrame` によって毎フレーム実行される処理の流れです。
+`requestAnimationFrame` によって毎フレーム（約1/60秒ごと）実行される処理の流れです。
 
-```text
-+----------+                                +-----------+
-| GameLoop |                                | TextAlive |
-+-----+----+                                +-----+-----+
-      |                                           |
-      +--- onUpdate(delta) --> [GameManager]      |
-                                     |            |
-      +------------------------------+<--getPos---+
-      | 1. 再生位置同期              |
-      |                              |
-      +------------------------------+---spawn---> [LyricsRenderer]
-      | 2. 歌詞更新 (Spawn)          |                  |
-      |                              |            [DOM Update]
-      |                              |
-      +------------------------------+<--input---- [MediaPipe/Mouse]
-      | 3. ホールド・入力判定        |
-      |    (Distance Check)          |
-      |                              |
-      +------------------------------+
-      | 4. スコア・コンボ加算        |
-      +------------------------------+
+```mermaid
+flowchart TD
+    Start([START FRAME]) --> Input[1. センシング・入力取得<br/>経過時間/マウス/骨格座標]
+    Input --> Sync[2. 楽曲同期 TextAlive<br/>再生位置取得]
+    
+    Sync --> CheckLyrics{歌詞データはある？}
+    CheckLyrics -- No --> HitCheck
+    CheckLyrics -- Yes --> Spawn[歌詞バブル生成 Spawn]
+    Spawn --> HitCheck
+    
+    HitCheck{当たり判定 Hit Check} -->|手首・カーソルとの距離| ScoreCalc[3. スコア・コンボ計算<br/>ホールド進行度更新]
+    
+    ScoreCalc --> Render[4. 描画 Render<br/>DOM / Three.js]
+    Render --> End([END FRAME])
+    
+    End -.->|Next Frame| Start
 ```
-
 ---
 
 ## 3.2 スコア送信フロー (Score Submission)
-クライアントからサーバーへの安全なスコア送信プロセスです。
+ゲーム終了後、クライアントからサーバーへスコアを送信し、検証を経て保存するまでのプロセスです。
 
-```text
-[Client / Browser]                       [Server / Cloudflare Workers]
-        |                                              |
-        |---(1) トークン取得 (GET /api/token)--------->|
-        |                                              |
-        |<--(2) 署名トークン & Nonce返却---------------|
-        |                                              |
-    [Turnstile]                                        |
-        |                                              |
-        |---(3) CAPTCHA認証 -------------------------->|
-        |                                              |
-        |---(4) スコア送信 (POST /api/score)---------->|
-        |       { score, rank, token... }              |
-        |                                              |
-        |                                      [Validation]
-        |                                      + Rate Limit Check
-        |                                      + HMAC Signature Verify
-        |                                      + Turnstile Verify
-        |                                      + Cheat Check
-        |                                              |
-        |                                       [Supabase DB]
-        |                                              |
-        |<--(5) 200 OK (保存完了)----------------------|
-        |                                              |
+```mermaid
+flowchart TD
+    Finish([GAME FINISHED]) --> Token[1. トークン取得<br/>GET /api/token]
+    Token --> Captcha[2. CAPTCHA認証<br/>Turnstile]
+    Captcha --> Submit[3. スコア送信<br/>POST /api/score]
+    
+    Submit --> Verify[4. サーバー側検証]
+    
+    subgraph ServerSide [Server Verification]
+        Verify --> RateLimit{レート制限}
+        RateLimit -- NG --> Err429[Error 429]
+        RateLimit -- OK --> SignCheck{署名 HMAC 検証}
+        
+        SignCheck -- NG --> Err403[Error 403]
+        SignCheck -- OK --> BotCheck{Turnstile検証}
+        
+        BotCheck -- NG --> Err403Bot[Error 403]
+        BotCheck -- OK --> ScoreCheck{スコアは正常値？}
+    end
+    
+    ScoreCheck -- Yes --> Save
+    ScoreCheck -- "No (不正疑い)" --> Flag[不正フラグ付与<br/>is_suspicious=true]
+    Flag --> Save
+    
+    Save[(5. DB保存<br/>Supabase)] --> RankUpdate[ランキング更新]
+    RankUpdate --> End([END])
 ```
-
-### 補足説明
-1. **トークン取得**: クライアントは `GET /api/token` でHMAC署名付きトークンを取得。
-2. **CAPTCHA認証**: Turnstileウィジェットを実行し、認証トークンを取得。
-3. **データ送信**: スコア、コンボ、ランク等のデータを `POST /api/score` へ送信。
-4. **サーバー検証**: レート制限、署名検証、Botチェック、不正スコア検知を実行。
-5. **DB保存**: 全ての検証を通過した場合のみ、Supabaseへ保存。
+### 処理詳細補足
+* **ゲームループ**: ユーザー入力（マウス、タッチ、骨格）と楽曲再生位置を毎フレーム同期させ、判定と描画を行います。
+* **スコア送信**: 不正なスコア送信を防ぐため、サーバー側で「レート制限」「署名検証」「Bot認証」「スコア妥当性チェック」の4重の検証を行います。
